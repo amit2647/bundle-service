@@ -8,7 +8,7 @@ const registry = require("./registry");
  * that slice of the bundle, made with the installing admin's own token so
  * every service applies its usual permission checks:
  *
- *   permissions → roles → catalog → email
+ *   permissions → roles → catalog → engagementTypes → email
  *
  * Every step is idempotent on its own side, and recorded here in
  * bundle_install_steps. A step that fails stops the install with status
@@ -25,7 +25,7 @@ const LEASE_MS = 2 * 60 * 1000;
 const STEP_TIMEOUT_MS = 30 * 1000;
 
 // Capabilities this deployment can install. Each milestone adds its own.
-const SUPPORTED_CAPABILITIES = new Set([]);
+const SUPPORTED_CAPABILITIES = new Set(["engagements"]);
 
 const url = (base, fallback) => process.env[base] || fallback;
 
@@ -47,6 +47,12 @@ const STEPS = [
     when: (manifest) => Boolean(manifest.catalog),
     target: (key, version) => `${url("SERVICE_SERVICE_URL", "http://service-service:4003")}/services/bundles/${key}/${version}`,
     body: (manifest) => manifest.catalog,
+  },
+  {
+    step: "engagementTypes",
+    when: (manifest) => (manifest.engagementTypes || []).length > 0,
+    target: (key, version) => `${url("ENGAGEMENT_SERVICE_URL", "http://engagement-service:4009")}/engagements/bundles/${key}/${version}`,
+    body: (manifest) => ({ engagementTypes: manifest.engagementTypes }),
   },
   {
     step: "email",
