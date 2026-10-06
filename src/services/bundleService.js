@@ -34,6 +34,8 @@ async function installed(organizationId) {
     name: manifest.name,
     version: row.version,
     installedAt: row.installed_at,
+    // Which capability screens apply: engagements, obligations, documents, vault.
+    capabilities: manifest.requires?.capabilities || [],
   };
 
   for (const section of PUBLIC_SECTIONS) {
