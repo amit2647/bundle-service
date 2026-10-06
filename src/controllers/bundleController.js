@@ -1,5 +1,6 @@
 const bundleService = require("../services/bundleService");
 const installService = require("../services/installService");
+const customizedService = require("../services/customizedService");
 
 function handleError(res, error) {
   if (!error.statusCode) {
@@ -68,4 +69,24 @@ async function upgrade(req, res) {
   }
 }
 
-module.exports = { getInstalled, getOffered, getStatus, install, upgrade };
+const caller = (req) => ({ organizationId: req.auth.organizationId, userId: req.auth.userId, token: req.headers.authorization.split(" ")[1] });
+
+// Items the firm edited while the installed version ships something else.
+async function getCustomized(req, res) {
+  try {
+    return res.json(await customizedService.list(caller(req)));
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+// Accept the bundle's version of one item, or keep the firm's (dismiss).
+async function chooseCustomized(req, res) {
+  try {
+    return res.json(await customizedService.choose(caller(req), req.body || {}));
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+module.exports = { getInstalled, getOffered, getStatus, install, upgrade, getCustomized, chooseCustomized };

@@ -220,14 +220,19 @@ async function claim(organizationId, userId, entry, steps, mode) {
   }
 }
 
-async function callStep(step, entry, token) {
+/*
+ * One step's call. `query` and `extra` serve the customized-items screen:
+ * "?dryRun=1" to report without writing, and `accept` / `dismiss` lists of
+ * "kind:key" for one item (see bundleSync in the services).
+ */
+async function callStep(step, entry, token, { query = "", extra = {} } = {}) {
   let response;
 
   try {
-    response = await fetch(step.target(entry.key, entry.version), {
+    response = await fetch(`${step.target(entry.key, entry.version)}${query}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify(step.body(entry.manifest)),
+      body: JSON.stringify({ ...step.body(entry.manifest), ...extra }),
       signal: AbortSignal.timeout(STEP_TIMEOUT_MS),
     });
   } catch (error) {
@@ -376,4 +381,4 @@ async function status(organizationId) {
   };
 }
 
-module.exports = { install, status, claimDecision, compareVersions, stepsFor, STEPS, LEASE_MS };
+module.exports = { install, status, claimDecision, compareVersions, stepsFor, callStep, audit, STEPS, LEASE_MS };
