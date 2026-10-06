@@ -15,5 +15,6 @@ router.get("/bundles/installed/status", authenticate, requirePermission("bundles
 router.get("/bundles", authenticate, requirePermission("bundles.manage"), controller.getOffered);
 
 router.post("/bundles/:key/install", authenticate, requirePermission("bundles.manage"), controller.install);
+router.post("/bundles/:key/upgrade", authenticate, requirePermission("bundles.manage"), controller.upgrade);
 
 module.exports = router;

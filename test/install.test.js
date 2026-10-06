@@ -77,7 +77,21 @@ describe("claimDecision", () => {
   test("no row: create one", () => assert.equal(decide(null).action, "create"));
   test("another bundle: refused — one per organization", () => assert.match(decide(row({ bundle_key: "legal" })).message, /one bundle per organization/));
   test("already installed at this version: nothing to do", () => assert.equal(decide(row({ status: "installed" })).action, "done"));
-  test("installed at another version: refused until upgrades exist", () => assert.equal(decide(row({ status: "installed", version: "0.0.9" })).statusCode, 409));
+  test("installed at an older version: install refuses and points to upgrade", () => assert.match(decide(row({ status: "installed", version: "0.0.9" })).message, /upgrade to 0.1.0 instead/));
+  test("installed at an older version: upgrade proceeds", () => {
+    assert.equal(claimDecision(row({ status: "installed", version: "0.0.9" }), { key: "ca-practice", version: "0.1.0", mode: "upgrade", now }).action, "upgrade");
+  });
+  test("an upgrade never goes back a version", () => {
+    assert.match(claimDecision(row({ status: "installed", version: "0.2.0" }), { key: "ca-practice", version: "0.1.0", mode: "upgrade", now }).message, /going back/);
+  });
+  test("an upgrade running right now: refused; one whose holder died: resumed", () => {
+    const upgrading = (age) => row({ status: "upgrading", version: "0.0.9", updated_at: new Date(now - age).toISOString() });
+    assert.match(claimDecision(upgrading(1000), { key: "ca-practice", version: "0.1.0", mode: "upgrade", now }).message, /already running/);
+    assert.equal(claimDecision(upgrading(LEASE_MS + 1), { key: "ca-practice", version: "0.1.0", mode: "upgrade", now }).action, "upgrade");
+  });
+  test("nothing installed: upgrade refuses", () => {
+    assert.match(claimDecision(null, { key: "ca-practice", version: "0.1.0", mode: "upgrade", now }).message, /install the bundle first/);
+  });
   test("an install running right now: refused", () => assert.match(decide(row({ status: "installing" })).message, /already running/));
   test("a stale install whose holder died: resumed", () => {
     assert.equal(decide(row({ status: "installing", updated_at: new Date(now - LEASE_MS - 1).toISOString() })).action, "resume");
@@ -86,10 +100,10 @@ describe("claimDecision", () => {
 });
 
 describe("steps", () => {
-  test("run permissions → roles → catalog → engagementTypes → obligations → email, skipping what the bundle lacks", () => {
+  test("run permissions → roles → catalog → engagementTypes → obligations → documents → email, skipping what the bundle lacks", () => {
     assert.deepEqual(
-      stepsFor({ permissions: [{}], roles: [{}], catalog: {}, engagementTypes: [{}], obligations: [{}], email: [{}] }).map((s) => s.step),
-      ["permissions", "roles", "catalog", "engagementTypes", "obligations", "email"],
+      stepsFor({ permissions: [{}], roles: [{}], catalog: {}, engagementTypes: [{}], obligations: [{}], documents: [{}], email: [{}] }).map((s) => s.step),
+      ["permissions", "roles", "catalog", "engagementTypes", "obligations", "documents", "email"],
     );
     assert.deepEqual(stepsFor({ catalog: {}, roles: [] }).map((s) => s.step), ["catalog"]);
   });
@@ -122,21 +136,26 @@ function fakeQuery(text, params = []) {
     return { rows: [db.org] };
   }
   if (/^UPDATE organization_bundles SET status = 'installing'/.test(sql)) { db.org.status = "installing"; return { rows: [db.org] }; }
-  if (/^UPDATE organization_bundles SET status = 'failed'/.test(sql)) { db.org.status = "failed"; return { rows: [] }; }
+  if (/^UPDATE organization_bundles SET status = 'upgrading'/.test(sql)) { db.org.status = "upgrading"; return { rows: [db.org] }; }
+  if (/^UPDATE organization_bundles SET status = \$2/.test(sql)) { db.org.status = params[1]; return { rows: [] }; }
+  if (/^UPDATE organization_bundles SET status = 'installed', version = \$2/.test(sql)) { Object.assign(db.org, { status: "installed", version: params[1] }); return { rows: [] }; }
   if (/^UPDATE organization_bundles SET status = 'installed'/.test(sql)) { db.org.status = "installed"; return { rows: [] }; }
   if (/^UPDATE organization_bundles SET updated_at/.test(sql)) return { rows: [] };
 
+  // Steps are recorded per version, as in bundle_install_steps.
+  const stepOf = () => db.steps.find((s) => s.version === params[1] && s.step === params[2]);
   if (/^INSERT INTO bundle_install_steps/.test(sql)) {
-    if (!db.steps.find((s) => s.step === params[2])) db.steps.push({ step: params[2], status: "pending", attempts: 0, last_error: null });
+    if (!stepOf()) db.steps.push({ version: params[1], step: params[2], status: "pending", attempts: 0, last_error: null });
     return { rows: [] };
   }
-  if (/^SELECT step, status FROM bundle_install_steps/.test(sql)) return { rows: db.steps };
+  if (/^SELECT step, status FROM bundle_install_steps/.test(sql)) return { rows: db.steps.filter((s) => s.version === params[1]) };
+  if (/^SELECT version FROM bundle_install_steps/.test(sql)) return { rows: db.steps.length ? [{ version: db.steps.at(-1).version }] : [] };
   if (/^UPDATE bundle_install_steps SET status = 'done'/.test(sql)) {
-    Object.assign(db.steps.find((s) => s.step === params[2]), { status: "done", last_error: null, attempts: db.steps.find((s) => s.step === params[2]).attempts + 1 });
+    Object.assign(stepOf(), { status: "done", last_error: null, attempts: stepOf().attempts + 1 });
     return { rows: [] };
   }
   if (/^UPDATE bundle_install_steps SET status = 'failed'/.test(sql)) {
-    const step = db.steps.find((s) => s.step === params[2]);
+    const step = stepOf();
     Object.assign(step, { status: "failed", attempts: step.attempts + 1, last_error: params[3] });
     return { rows: [] };
   }
@@ -144,7 +163,7 @@ function fakeQuery(text, params = []) {
   if (/FROM organization_bundles ob JOIN bundles b/.test(sql)) {
     return { rows: db.org ? [{ ...db.org, name: "Test Practice", installed_at: null }] : [] };
   }
-  if (/^SELECT step, status, attempts, last_error, completed_at/.test(sql)) return { rows: db.steps };
+  if (/^SELECT step, status, attempts, last_error, completed_at/.test(sql)) return { rows: db.steps.filter((s) => s.version === params[1]) };
 
   throw new Error(`unexpected query: ${sql}`);
 }
@@ -227,6 +246,38 @@ describe("install", () => {
     assert.deepEqual(calls.map((call) => call.step), ["services"]);
     assert.equal(result.bundle.status, "installed");
     assert.deepEqual(db.steps.map((s) => s.attempts), [1, 1, 2]);
+  });
+
+  test("install refuses a newer version over an installed one; upgrade runs every step at it", async () => {
+    // Installed earlier at 0.9.0.
+    db.org = { id: 1, organization_id: 3, bundle_key: "test-practice", version: "0.9.0", status: "installed", updated_at: new Date(0).toISOString() };
+    db.steps = ["permissions", "roles", "catalog"].map((step) => ({ version: "0.9.0", step, status: "done", attempts: 1, last_error: null }));
+
+    await assert.rejects(install(actor, "test-practice"), (error) => error.statusCode === 409 && /upgrade to 1.0.0 instead/.test(error.message));
+
+    const result = await install(actor, "test-practice", { mode: "upgrade" });
+
+    assert.deepEqual(calls.map((call) => call.step), ["permissions", "roles", "services"]);
+    assert.equal(result.bundle.version, "1.0.0");
+    assert.equal(result.bundle.status, "installed");
+    assert.equal(result.bundle.upgrade, null);
+    assert.deepEqual(db.audit, ["bundle.upgraded"]);
+  });
+
+  test("a failed upgrade leaves the old version in use; upgrading again resumes", async () => {
+    db.org = { id: 1, organization_id: 3, bundle_key: "test-practice", version: "0.9.0", status: "installed", updated_at: new Date(0).toISOString() };
+    failing = "roles";
+
+    await assert.rejects(install(actor, "test-practice", { mode: "upgrade" }), (error) => error.statusCode === 502 && /0.9.0 is still in use/.test(error.message));
+
+    assert.deepEqual([db.org.status, db.org.version], ["installed", "0.9.0"]);
+
+    failing = null;
+    calls = [];
+    const result = await install(actor, "test-practice", { mode: "upgrade" });
+
+    assert.deepEqual(calls.map((call) => call.step), ["roles", "services"]);
+    assert.equal(result.bundle.version, "1.0.0");
   });
 
   test("an unknown bundle is 404", async () => {

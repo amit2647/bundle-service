@@ -24,7 +24,9 @@ async function installed(organizationId) {
   const row = result.rows[0];
 
   // Until an install has finished, the organization works as it did before.
-  if (!row || row.status !== "installed") {
+  // During an upgrade it keeps the version it has (the row's version moves
+  // only when the upgrade finishes).
+  if (!row || !["installed", "upgrading"].includes(row.status)) {
     return { bundle: null };
   }
 

@@ -8,7 +8,7 @@ const registry = require("./registry");
  * that slice of the bundle, made with the installing admin's own token so
  * every service applies its usual permission checks:
  *
- *   permissions → roles → catalog → engagementTypes → obligations → email
+ *   permissions → roles → catalog → engagementTypes → obligations → documents → email
  *
  * Every step is idempotent on its own side, and recorded here in
  * bundle_install_steps. A step that fails stops the install with status
@@ -25,7 +25,7 @@ const LEASE_MS = 2 * 60 * 1000;
 const STEP_TIMEOUT_MS = 30 * 1000;
 
 // Capabilities this deployment can install. Each milestone adds its own.
-const SUPPORTED_CAPABILITIES = new Set(["engagements", "obligations"]);
+const SUPPORTED_CAPABILITIES = new Set(["engagements", "obligations", "documents"]);
 
 const url = (base, fallback) => process.env[base] || fallback;
 
@@ -61,6 +61,12 @@ const STEPS = [
     body: (manifest) => ({ obligations: manifest.obligations }),
   },
   {
+    step: "documents",
+    when: (manifest) => (manifest.documents || []).length > 0,
+    target: (key, version) => `${url("DOCUMENT_SERVICE_URL", "http://document-service:4011")}/documents/bundles/${key}/${version}`,
+    body: (manifest) => ({ documents: manifest.documents }),
+  },
+  {
     step: "email",
     when: (manifest) => (manifest.email || []).length > 0,
     target: (key, version) => `${url("EMAIL_SERVICE_URL", "http://email-service:4006")}/emails/bundles/${key}/${version}`,
@@ -77,29 +83,58 @@ function httpError(statusCode, message, extra = {}) {
 
 const stepsFor = (manifest) => STEPS.filter((step) => step.when(manifest));
 
+// Compares two x.y.z versions: negative, zero or positive.
+function compareVersions(a, b) {
+  const pa = String(a).split(".").map(Number);
+  const pb = String(b).split(".").map(Number);
+
+  for (let index = 0; index < 3; index += 1) {
+    if ((pa[index] || 0) !== (pb[index] || 0)) return (pa[index] || 0) - (pb[index] || 0);
+  }
+
+  return 0;
+}
+
 /*
  * Decides what a request may do with the organization's existing row.
- * Pure, so the rules are tested on their own.
+ * Pure, so the rules are tested on their own. `mode` is "install" or
+ * "upgrade".
+ *
+ * An upgrade runs while the organization keeps working on the version it
+ * has: the row's version changes only when every step has finished at the
+ * new one. A failed upgrade leaves the row installed at the old version,
+ * and upgrading again resumes at the step that failed.
  */
-function claimDecision(row, { key, version, now = Date.now() }) {
+function claimDecision(row, { key, version, mode = "install", now = Date.now() }) {
   if (!row) {
-    return { action: "create" };
+    return mode === "upgrade"
+      ? { action: "refuse", statusCode: 409, message: "Nothing is installed to upgrade; install the bundle first" }
+      : { action: "create" };
   }
 
   if (row.bundle_key !== key) {
     return { action: "refuse", statusCode: 409, message: `This organization already has the ${row.bundle_key} bundle — one bundle per organization` };
   }
 
-  if (row.status === "installed") {
-    return row.version === version
-      ? { action: "done" }
-      : { action: "refuse", statusCode: 409, message: `Version ${row.version} is installed; upgrading is not available yet` };
-  }
-
   const fresh = now - new Date(row.updated_at).getTime() < LEASE_MS;
 
   if (["installing", "upgrading"].includes(row.status) && fresh) {
     return { action: "refuse", statusCode: 409, message: "An install is already running for this organization" };
+  }
+
+  // Installed — or an upgrade whose holder died, which counts as installed.
+  if (row.status === "installed" || row.status === "upgrading") {
+    if (row.version === version) {
+      return { action: "done" };
+    }
+
+    if (compareVersions(version, row.version) < 0) {
+      return { action: "refuse", statusCode: 409, message: `Version ${row.version} is installed; going back to ${version} is not possible` };
+    }
+
+    return mode === "upgrade"
+      ? { action: "upgrade" }
+      : { action: "refuse", statusCode: 409, message: `Version ${row.version} is installed; upgrade to ${version} instead` };
   }
 
   if (row.version !== version) {
@@ -109,7 +144,7 @@ function claimDecision(row, { key, version, now = Date.now() }) {
   return { action: "resume" };
 }
 
-async function claim(organizationId, userId, entry, steps) {
+async function claim(organizationId, userId, entry, steps, mode) {
   const client = await pool.connect();
 
   try {
@@ -119,7 +154,7 @@ async function claim(organizationId, userId, entry, steps) {
     await client.query("SELECT pg_advisory_xact_lock(hashtext('bundle-install'), $1)", [organizationId]);
 
     const existing = await client.query("SELECT * FROM organization_bundles WHERE organization_id = $1", [organizationId]);
-    const decision = claimDecision(existing.rows[0], { key: entry.key, version: entry.version });
+    const decision = claimDecision(existing.rows[0], { key: entry.key, version: entry.version, mode });
 
     if (decision.action === "refuse") {
       throw httpError(decision.statusCode, decision.message);
@@ -135,6 +170,13 @@ async function claim(organizationId, userId, entry, steps) {
         [organizationId, entry.key, entry.version, entry.manifest.contract, userId],
       );
       row = created.rows[0];
+    } else if (decision.action === "upgrade") {
+      // The version stays the one in use until every step has finished.
+      const upgrading = await client.query(
+        "UPDATE organization_bundles SET status = 'upgrading', updated_at = NOW() WHERE id = $1 RETURNING *",
+        [row.id],
+      );
+      row = upgrading.rows[0];
     } else if (decision.action === "resume") {
       const resumed = await client.query(
         "UPDATE organization_bundles SET status = 'installing', updated_at = NOW() WHERE id = $1 RETURNING *",
@@ -156,7 +198,7 @@ async function claim(organizationId, userId, entry, steps) {
 
     await client.query("COMMIT");
 
-    return { row, done: decision.action === "done" };
+    return { row, done: decision.action === "done", upgrading: decision.action === "upgrade" };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -197,7 +239,7 @@ async function audit(organizationId, userId, action, details) {
   );
 }
 
-async function install({ organizationId, userId, token }, key) {
+async function install({ organizationId, userId, token }, key, { mode = "install" } = {}) {
   const entry = registry.get(key);
 
   if (!entry) {
@@ -211,7 +253,7 @@ async function install({ organizationId, userId, token }, key) {
   }
 
   const steps = stepsFor(entry.manifest);
-  const { row, done } = await claim(organizationId, userId, entry, steps);
+  const { row, done, upgrading } = await claim(organizationId, userId, entry, steps, mode);
 
   if (done) {
     return status(organizationId);
@@ -249,20 +291,33 @@ async function install({ organizationId, userId, token }, key) {
          WHERE organization_bundle_id = $1 AND version = $2 AND step = $3`,
         [row.id, entry.version, step.step, error.message],
       );
-      await pool.query("UPDATE organization_bundles SET status = 'failed', updated_at = NOW() WHERE id = $1", [row.id]);
-      await audit(organizationId, userId, "bundle.install_failed", { bundle: key, version: entry.version, step: step.step, error: error.message });
+      // A failed upgrade leaves the organization on the version it had.
+      await pool.query("UPDATE organization_bundles SET status = $2, updated_at = NOW() WHERE id = $1", [row.id, upgrading ? "installed" : "failed"]);
+      await audit(organizationId, userId, upgrading ? "bundle.upgrade_failed" : "bundle.install_failed", { bundle: key, version: entry.version, step: step.step, error: error.message });
 
-      throw httpError(502, `Install stopped at the ${step.step} step: ${error.message}. Install again to resume.`, {
-        step: step.step,
-      });
+      throw httpError(
+        502,
+        upgrading
+          ? `Upgrade stopped at the ${step.step} step: ${error.message}. Version ${row.version} is still in use; upgrade again to resume.`
+          : `Install stopped at the ${step.step} step: ${error.message}. Install again to resume.`,
+        { step: step.step },
+      );
     }
   }
 
-  await pool.query(
-    "UPDATE organization_bundles SET status = 'installed', installed_at = NOW(), updated_at = NOW() WHERE id = $1",
-    [row.id],
-  );
-  await audit(organizationId, userId, "bundle.installed", { bundle: key, version: entry.version });
+  if (upgrading) {
+    await pool.query(
+      "UPDATE organization_bundles SET status = 'installed', version = $2, contract_version = $3, updated_at = NOW() WHERE id = $1",
+      [row.id, entry.version, entry.manifest.contract],
+    );
+    await audit(organizationId, userId, "bundle.upgraded", { bundle: key, from: row.version, version: entry.version });
+  } else {
+    await pool.query(
+      "UPDATE organization_bundles SET status = 'installed', installed_at = NOW(), updated_at = NOW() WHERE id = $1",
+      [row.id],
+    );
+    await audit(organizationId, userId, "bundle.installed", { bundle: key, version: entry.version });
+  }
 
   return status(organizationId);
 }
@@ -281,11 +336,18 @@ async function status(organizationId) {
     return { bundle: null };
   }
 
-  const steps = await pool.query(
-    `SELECT step, status, attempts, last_error, completed_at FROM bundle_install_steps
-     WHERE organization_bundle_id = $1 AND version = $2 ORDER BY id`,
-    [row.id, row.version],
-  );
+  const stepsOf = async (version) =>
+    (
+      await pool.query(
+        `SELECT step, status, attempts, last_error, completed_at FROM bundle_install_steps
+         WHERE organization_bundle_id = $1 AND version = $2 ORDER BY id`,
+        [row.id, version],
+      )
+    ).rows.map((step) => ({ step: step.step, status: step.status, attempts: step.attempts, error: step.last_error, completedAt: step.completed_at }));
+
+  // An upgrade begun but not finished: the steps recorded for a later version.
+  const latest = (await pool.query("SELECT version FROM bundle_install_steps WHERE organization_bundle_id = $1 ORDER BY id DESC LIMIT 1", [row.id])).rows[0];
+  const upgrade = latest && latest.version !== row.version && compareVersions(latest.version, row.version) > 0 ? { version: latest.version, steps: await stepsOf(latest.version) } : null;
 
   return {
     bundle: {
@@ -295,15 +357,10 @@ async function status(organizationId) {
       status: row.status,
       installedAt: row.installed_at,
       updatedAt: row.updated_at,
-      steps: steps.rows.map((step) => ({
-        step: step.step,
-        status: step.status,
-        attempts: step.attempts,
-        error: step.last_error,
-        completedAt: step.completed_at,
-      })),
+      upgrade,
+      steps: await stepsOf(row.version),
     },
   };
 }
 
-module.exports = { install, status, claimDecision, stepsFor, STEPS, LEASE_MS };
+module.exports = { install, status, claimDecision, compareVersions, stepsFor, STEPS, LEASE_MS };

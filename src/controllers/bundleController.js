@@ -52,4 +52,20 @@ async function install(req, res) {
   }
 }
 
-module.exports = { getInstalled, getOffered, getStatus, install };
+// The same steps at a newer version; the firm's edits are kept by each step.
+async function upgrade(req, res) {
+  try {
+    const token = req.headers.authorization.split(" ")[1];
+    const result = await installService.install(
+      { organizationId: req.auth.organizationId, userId: req.auth.userId, token },
+      req.params.key,
+      { mode: "upgrade" },
+    );
+
+    return res.json(result);
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+module.exports = { getInstalled, getOffered, getStatus, install, upgrade };
