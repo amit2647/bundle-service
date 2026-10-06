@@ -8,7 +8,7 @@ const registry = require("./registry");
  * that slice of the bundle, made with the installing admin's own token so
  * every service applies its usual permission checks:
  *
- *   permissions → roles → catalog → engagementTypes → obligations → documents → vault → email
+ *   permissions → roles → catalog → engagementTypes → obligations → documents → vault → email → help
  *
  * Every step is idempotent on its own side, and recorded here in
  * bundle_install_steps. A step that fails stops the install with status
@@ -77,6 +77,13 @@ const STEPS = [
     when: (manifest) => (manifest.email || []).length > 0,
     target: (key, version) => `${url("EMAIL_SERVICE_URL", "http://email-service:4006")}/emails/bundles/${key}/${version}`,
     body: (manifest) => ({ email: manifest.email }),
+  },
+  {
+    // The bundle's help docs, for the assistant's search_help.
+    step: "help",
+    when: (manifest) => (manifest.help || []).length > 0,
+    target: (key, version) => `${url("ASSISTANT_SERVICE_URL", "http://assistant-service:4007")}/assistant/bundles/${key}/${version}`,
+    body: (manifest) => ({ help: manifest.help }),
   },
 ];
 

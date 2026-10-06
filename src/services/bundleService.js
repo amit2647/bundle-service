@@ -10,7 +10,8 @@ const registry = require("./registry");
  * Shared with every signed-in member (screens need the labels); templates,
  * rules and email bodies are not part of it.
  */
-const PUBLIC_SECTIONS = ["vocabulary", "profiles", "identifiers", "peopleRoles", "pipeline", "engagementTypes"];
+// The dashboard cards are public too: labels, permissions and named queries, no data.
+const PUBLIC_SECTIONS = ["vocabulary", "profiles", "identifiers", "peopleRoles", "pipeline", "engagementTypes", "dashboard"];
 
 async function installed(organizationId) {
   const result = await pool.query(
