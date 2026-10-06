@@ -100,10 +100,10 @@ describe("claimDecision", () => {
 });
 
 describe("steps", () => {
-  test("run permissions → roles → catalog → engagementTypes → obligations → documents → email, skipping what the bundle lacks", () => {
+  test("run permissions → roles → catalog → engagementTypes → obligations → documents → vault → email, skipping what the bundle lacks", () => {
     assert.deepEqual(
-      stepsFor({ permissions: [{}], roles: [{}], catalog: {}, engagementTypes: [{}], obligations: [{}], documents: [{}], email: [{}] }).map((s) => s.step),
-      ["permissions", "roles", "catalog", "engagementTypes", "obligations", "documents", "email"],
+      stepsFor({ permissions: [{}], roles: [{}], catalog: {}, engagementTypes: [{}], obligations: [{}], documents: [{}], vault: { portals: [{}] }, email: [{}] }).map((s) => s.step),
+      ["permissions", "roles", "catalog", "engagementTypes", "obligations", "documents", "vault", "email"],
     );
     assert.deepEqual(stepsFor({ catalog: {}, roles: [] }).map((s) => s.step), ["catalog"]);
   });

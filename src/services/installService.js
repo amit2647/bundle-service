@@ -8,7 +8,7 @@ const registry = require("./registry");
  * that slice of the bundle, made with the installing admin's own token so
  * every service applies its usual permission checks:
  *
- *   permissions → roles → catalog → engagementTypes → obligations → documents → email
+ *   permissions → roles → catalog → engagementTypes → obligations → documents → vault → email
  *
  * Every step is idempotent on its own side, and recorded here in
  * bundle_install_steps. A step that fails stops the install with status
@@ -25,7 +25,7 @@ const LEASE_MS = 2 * 60 * 1000;
 const STEP_TIMEOUT_MS = 30 * 1000;
 
 // Capabilities this deployment can install. Each milestone adds its own.
-const SUPPORTED_CAPABILITIES = new Set(["engagements", "obligations", "documents"]);
+const SUPPORTED_CAPABILITIES = new Set(["engagements", "obligations", "documents", "vault"]);
 
 const url = (base, fallback) => process.env[base] || fallback;
 
@@ -65,6 +65,12 @@ const STEPS = [
     when: (manifest) => (manifest.documents || []).length > 0,
     target: (key, version) => `${url("DOCUMENT_SERVICE_URL", "http://document-service:4011")}/documents/bundles/${key}/${version}`,
     body: (manifest) => ({ documents: manifest.documents }),
+  },
+  {
+    step: "vault",
+    when: (manifest) => (manifest.vault?.portals || []).length > 0,
+    target: (key, version) => `${url("VAULT_SERVICE_URL", "http://vault-service:4012")}/vault/bundles/${key}/${version}`,
+    body: (manifest) => ({ vault: manifest.vault }),
   },
   {
     step: "email",
