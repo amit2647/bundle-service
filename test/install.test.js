@@ -321,6 +321,16 @@ describe("routes", () => {
     assert.deepEqual(await response.json(), { bundle: null });
   });
 
+  test("an offered bundle's summary is public, for first-run setup — and nothing more", async () => {
+    const response = await realFetch(`${base}/bundles/offered/test-practice`);
+    const { bundle } = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(bundle.name, "Test Practice");
+    assert.deepEqual(Object.keys(bundle).sort(), ["capabilities", "contents", "description", "key", "name", "version"]);
+    assert.equal((await realFetch(`${base}/bundles/offered/nope`)).status, 404);
+  });
+
   test("without a token, nothing", async () => {
     assert.equal((await realFetch(`${base}/bundles/installed`)).status, 401);
   });

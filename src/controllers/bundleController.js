@@ -31,6 +31,14 @@ async function getOffered(req, res) {
   }
 }
 
+// One offered bundle's public summary (no account needed): first-run setup
+// shows what it will install before any admin exists.
+function getOfferedOne(req, res) {
+  const bundle = bundleService.offered().find((entry) => entry.key === req.params.key);
+
+  return bundle ? res.json({ bundle }) : res.status(404).json({ error: "No such bundle is offered" });
+}
+
 async function getStatus(req, res) {
   try {
     return res.json(await installService.status(req.auth.organizationId));
@@ -89,4 +97,4 @@ async function chooseCustomized(req, res) {
   }
 }
 
-module.exports = { getInstalled, getOffered, getStatus, install, upgrade, getCustomized, chooseCustomized };
+module.exports = { getInstalled, getOffered, getOfferedOne, getStatus, install, upgrade, getCustomized, chooseCustomized };

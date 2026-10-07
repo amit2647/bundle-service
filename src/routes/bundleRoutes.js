@@ -6,6 +6,10 @@ const controller = require("../controllers/bundleController");
 
 const router = express.Router();
 
+// Public: what a deployment offers, for the first-run setup screen. Only the
+// summary Settings shows (name, version, description, contents).
+router.get("/bundles/offered/:key", controller.getOfferedOne);
+
 // Every signed-in member: the screens need the installed bundle's labels.
 router.get("/bundles/installed", authenticate, controller.getInstalled);
 
