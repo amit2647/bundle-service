@@ -3,7 +3,6 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const jwt = require("jsonwebtoken");
 
 /*
  * bundle-service: the registry, the install claim rules, and a whole install
@@ -11,8 +10,10 @@ const jwt = require("jsonwebtoken");
  * stand-in for the database and fake capability services.
  */
 
-process.env.JWT_SECRET = "unit-test-secret";
-process.env.JWT_ISSUER = "unit-test-issuer";
+// Hydra's tokens, signed with a test key served as a stubbed JWKS.
+const hydra = require("./helpers/hydraToken");
+
+before(() => hydra.ready);
 
 const pool = require("../src/config/database");
 const registry = require("../src/services/registry");
@@ -302,7 +303,7 @@ describe("routes", () => {
     realFetch(`${base}${route}`, {
       method,
       headers: {
-        Authorization: `Bearer ${jwt.sign({ sub: 7, organizationId: 3, role: "X", permissions }, process.env.JWT_SECRET, { issuer: process.env.JWT_ISSUER })}`,
+        Authorization: `Bearer ${hydra.sign({ sub: 7, organizationId: 3, role: "X", permissions })}`,
       },
     });
 

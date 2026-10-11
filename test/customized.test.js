@@ -1,4 +1,4 @@
-const { describe, test, beforeEach, afterEach } = require("node:test");
+const { describe, test, beforeEach, afterEach, before } = require("node:test");
 const assert = require("node:assert/strict");
 
 /*
@@ -7,8 +7,10 @@ const assert = require("node:assert/strict");
  * the item named. Against a fake database and fake capability services.
  */
 
-process.env.JWT_SECRET = "unit-test-secret";
-process.env.JWT_ISSUER = "unit-test-issuer";
+// Hydra's tokens, signed with a test key served as a stubbed JWKS.
+const hydra = require("./helpers/hydraToken");
+
+before(() => hydra.ready);
 
 const pool = require("../src/config/database");
 const { list, choose } = require("../src/services/customizedService");
