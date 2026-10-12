@@ -21,8 +21,9 @@ const registry = require("./registry");
  * lease whose holder died goes stale after LEASE_MS and can be taken over.
  */
 
-const LEASE_MS = 2 * 60 * 1000;
-const STEP_TIMEOUT_MS = 30 * 1000;
+// BUNDLE_INSTALL_LEASE_MS, BUNDLE_STEP_TIMEOUT_MS: a step must finish well inside the lease.
+const LEASE_MS = Number(process.env.BUNDLE_INSTALL_LEASE_MS) || 2 * 60 * 1000;
+const STEP_TIMEOUT_MS = Number(process.env.BUNDLE_STEP_TIMEOUT_MS) || 30 * 1000;
 
 // Capabilities this deployment can install. Each milestone adds its own.
 const SUPPORTED_CAPABILITIES = new Set(["engagements", "obligations", "documents", "vault"]);
