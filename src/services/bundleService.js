@@ -47,6 +47,11 @@ async function installed(organizationId) {
     }
   }
 
+  // The catalog's service groups (labels only): the categories the service form offers.
+  if (manifest.catalog?.groups) {
+    bundle.serviceGroups = manifest.catalog.groups.map((group) => group.label);
+  }
+
   return { bundle };
 }
 
